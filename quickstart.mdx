@@ -1,80 +1,337 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with DocMind in under 5 minutes
 ---
 
-## Get started in three steps
+## Installation
 
-Get your documentation site running locally and make your first customization.
+DocMind requires Python 3.13 or higher and uses LangGraph for workflow orchestration.
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Install Dependencies">
+    Install DocMind using your preferred package manager:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+    ```bash
+    # Using pip
+    pip install langgraph pytest
+
+    # Or using poetry
+    poetry add langgraph pytest
+    ```
+
+    <Note>
+      DocMind is lightweight by design. The core system has only two dependencies: LangGraph for workflow orchestration and pytest for testing.
+    </Note>
+  </Step>
+
+  <Step title="Clone or Download">
+    Get the DocMind source code:
+
+    ```bash
+    git clone https://github.com/your-org/docmind.git
+    cd docmind
+    ```
+  </Step>
+
+  <Step title="Verify Installation">
+    Run the starter script to verify everything is working:
+
+    ```bash
+    python starter.py
+    ```
+
+    You should see output showing the workflow processing three sample queries about penalties, indemnification, and IP infringement.
+  </Step>
+</Steps>
+
+## Your First Query
+
+Let's process a legal document query with DocMind. This example shows how to ask about late payment penalties:
+
+```python
+import asyncio
+from state_types import DocMindState
+from workflow import build_graph_workflow
+
+async def run_docmind(query: str) -> str:
+    # Initialize the state with your query
+    initial_state: DocMindState = {
+        "query": query,
+        "decomposition": None,
+        "retrieved_sections": [],
+        "generated_response": None,
+        "judge_verdict": None,
+        "final_output": None,
+        "retry_count": 0,
+        "node_history": []
+    }
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    # Build and execute the workflow
+    graph = build_graph_workflow()
+    final_state = await graph.ainvoke(initial_state)
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    return final_state["final_output"]
 
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+# Run your first query
+if __name__ == "__main__":
+    response = asyncio.run(
+        run_docmind("What are the penalties for late payment?")
+    )
+    print(response)
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  DocMind runs asynchronously for optimal performance. Always use `asyncio.run()` or `await` when calling `run_docmind()`.
 </Note>
+
+## Understanding the Output
+
+When you run the query above, DocMind processes it through multiple stages:
+
+<Steps>
+  <Step title="Query Decomposition">
+    The system extracts:
+    - **Intent**: `penalty` (detected from "penalties" keyword)
+    - **Entities**: `["penalties", "late", "payment"]`
+    - **Constraints**: `{}` (no specific percentages or timeframes in query)
+    - **Temporals**: `[]` (no dates mentioned)
+  </Step>
+
+  <Step title="Strategic Retrieval">
+    Based on the intent, DocMind retrieves:
+    - **Primary match**: "Late Payment Penalties" (page 8) - highest relevance score
+    - **Secondary match**: "Payment Terms" (page 3) - provides context
+    
+    Sections are scored using intent mapping (5-7 points), entity matches in title (1.5 points), entity matches in content (1.0 points), and query term matches (0.5 points).
+  </Step>
+
+  <Step title="Response Generation">
+    The system synthesizes a response with page citations:
+    
+    ```
+    If payment is not received within thirty (30) days, Client shall be 
+    assessed a late fee of 1.5% per month (18% annually) on the outstanding 
+    balance. (See Late Payment Penalties, page 8)
+    ```
+  </Step>
+
+  <Step title="Validation">
+    The LLM-as-judge validates the response:
+    - Extracts claims: "1.5% per month", "18% annually", "30 days"
+    - Finds supporting quotes in source documents
+    - Calculates confidence score: **0.95** (highly confident)
+    - Verdict: **should_return = true** (no hallucinations detected)
+  </Step>
+</Steps>
+
+## More Example Queries
+
+Try these queries to see DocMind's different retrieval strategies:
+
+### Indemnification Query
+
+```python
+response = await run_docmind(
+    "What are the indemnification obligations?"
+)
+```
+
+This triggers **full-text search** because indemnification requires exact term matches. DocMind retrieves the "Indemnification" section (page 15) and explains both ABC Corporation's and Client's obligations.
+
+### IP Infringement Query
+
+```python
+response = await run_docmind(
+    "What happens if IP is infringed?"
+)
+```
+
+This uses **hybrid search** to find both the "Intellectual Property Rights" section (page 12) and related remedy sections, combining exact matches with semantic understanding.
+
+### Payment Terms Query
+
+```python
+response = await run_docmind(
+    "When are invoices due?"
+)
+```
+
+DocMind decomposes this to understand the user wants payment timing information, retrieves the "Payment Terms" section (page 3), and extracts the specific deadline: "thirty (30) days of receipt."
+
+## Inspecting the Workflow State
+
+For debugging or observability, you can inspect the full state after execution:
+
+```python
+from logger import log_workflow_complete
+
+# Run the workflow
+graph = build_graph_workflow()
+final_state = await graph.ainvoke(initial_state)
+
+# Log workflow details
+log_workflow_complete(
+    final_state.get('node_history', []),
+    len(final_state['retrieved_sections']),
+    final_state['judge_verdict'].get('confidence_score', 0.0)
+)
+
+# Inspect specific components
+print("Node History:", final_state['node_history'])
+print("Retrieved Sections:", final_state['retrieved_sections'])
+print("Judge Verdict:", final_state['judge_verdict'])
+print("Retry Count:", final_state['retry_count'])
+```
+
+The `node_history` shows the execution path:
+```python
+['decompose', 'retrieve', 'generate', 'judge', 'output']
+```
+
+<Note>
+  If validation fails, you'll see retry nodes in the history: `['decompose', 'retrieve', 'generate', 'judge', 'retrieve', 'generate', 'judge', 'output']`
+</Note>
+
+## Understanding Validation Failures
+
+DocMind automatically retries when the LLM-as-judge detects hallucinations:
+
+```python
+# Example: A hallucinated response would trigger retry
+judge_verdict = {
+    "claims": [
+        {
+            "text": "Client shall pay a 5% late fee",
+            "type": "quantitative",
+            "found_in_source": False,
+            "source_quote": None,
+            "status": "contradicted"  # Document says 1.5%, not 5%
+        }
+    ],
+    "confidence_score": 0.20,  # Below 0.5 threshold
+    "is_hallucinated": True,
+    "should_return": False
+}
+```
+
+When this happens:
+1. The system increments `retry_count`
+2. Returns to the `retrieve` node with updated strategy
+3. Generates a new response
+4. Re-validates with the judge
+5. Maximum 2 retry attempts before returning fallback message
+
+<Warning>
+  If DocMind returns "Unable to provide a confident response. Please rephrase your query," it means validation failed twice. This indicates either: (1) the information doesn't exist in the documents, or (2) the query needs to be more specific.
+</Warning>
+
+## Custom Document Stores
+
+The quickstart uses mock data, but you can connect your own document store:
+
+```python
+from mock_data import MockDocumentStore
+from typing import List, Dict
+
+class CustomDocumentStore:
+    async def full_text_search(self, query: str, top_k: int = 5) -> List[Dict]:
+        # Implement your search logic
+        # Must return list of dicts with: section_id, title, page_num, content
+        pass
+    
+    async def get_document_sections(self, doc_id: str) -> List[Dict]:
+        # Return all sections for a document
+        pass
+
+# Use in retrieval
+from components import AgenticRetriever
+
+store = CustomDocumentStore()
+retriever = AgenticRetriever(store)
+sections = await retriever.retrieve(query, decomposition)
+```
+
+Each section must include:
+- `section_id`: Unique identifier
+- `title`: Section heading
+- `page_num`: Page number in source document
+- `content`: Full section text
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Core Concepts"
+    icon="book"
+    href="/concepts/architecture"
+  >
+    Learn how query decomposition, agentic retrieval, and LLM validation work under the hood
+  </Card>
+  <Card
+    title="API Reference"
+    icon="code"
+    href="/api/query-decomposer"
+  >
+    Explore the complete API for all components and configuration options
+  </Card>
+  <Card
+    title="Testing Guide"
+    icon="flask"
+    href="/guides/testing"
+  >
+    Learn how to test retrieval accuracy and validation effectiveness
+  </Card>
+  <Card
+    title="Customization"
+    icon="wrench"
+    href="/guides/customization"
+  >
+    Customize DocMind for your specific document types and use cases
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Query returns 'Unable to provide a confident response'">
+    This means validation failed after 2 retry attempts. Common causes:
+    
+    1. Information doesn't exist in the documents
+    2. Query is too vague (try adding more specific terms)
+    3. Query uses different terminology than the documents
+    
+    **Solution**: Rephrase your query with more specific terms or check if the information exists in your document store.
+  </Accordion>
+
+  <Accordion title="Retrieval returns irrelevant sections">
+    Check your relevance threshold in `AgenticRetriever._filter_irrelevant()`. The default is 2.0, which requires either:
+    - Strong intent match (5-7 points)
+    - Multiple entity matches
+    - Entity match in title (1.5 points) + content match (1.0 points)
+    
+    **Solution**: Adjust the threshold or improve your query decomposition to better extract entities.
+  </Accordion>
+
+  <Accordion title="Judge incorrectly flags valid responses">
+    The judge may be too strict if:
+    - Your response makes valid inferences not explicitly stated
+    - Paraphrasing differs significantly from source text
+    
+    **Solution**: Check the `confidence_score` threshold (default 0.5) and adjust claim extraction patterns in `LLMJudge._extract_claims()`.
+  </Accordion>
+</AccordionGroup>
+
+## Testing Your Setup
+
+Run the test suite to validate your installation:
+
+```bash
+python test_starter.py
+```
+
+This runs three test scenarios:
+1. **Strategic Retrieval**: Validates section selection accuracy
+2. **LLM-as-Judge**: Tests hallucination detection
+3. **End-to-End**: Full workflow execution
+
+All tests should pass with the mock data. When connecting your own document store, update the test expectations accordingly.

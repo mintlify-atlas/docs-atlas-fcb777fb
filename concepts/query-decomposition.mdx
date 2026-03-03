@@ -1,0 +1,248 @@
+---
+title: "Query Decomposition"
+description: "Extract structured information from natural language using regex-based pattern matching"
+---
+
+## The Problem
+
+Natural language queries are inherently ambiguous. "What are the penalties?" could refer to:
+
+- Late payment fees
+- Contractual penalties
+- Legal sanctions
+- Performance penalties
+
+Without structure, search becomes unreliable. The QueryDecomposer solves this by extracting explicit intent, entities, constraints, and temporal references before retrieval begins.
+
+## Implementation
+
+**Location:** `components.py:8-63`
+
+The decomposer returns a structured dictionary:
+
+```python
+{
+  "intent": "penalty",
+  "entities": ["late", "payment", "penalties"],
+  "constraints": {"percentage": "1.5"},
+  "temporals": []
+}
+```
+
+## Intent Extraction
+
+**Method:** `_extract_intent(query: str) -> str`
+
+Uses a priority-ordered intent map with regex patterns:
+
+```python
+intent_map = [
+    ("penalty", r"\blate fee\b|\boverdue\b|\bpenalt(y|ies)\b"),
+    ("payment_terms", r"\bpay\b|\binvoice\b|\bpayment\b"),
+    ("intellectual_property", r"\bowned by\b|\blicense\b|\bintellectual property\b|\bIP\b|\binfring"),
+    ("indemnification", r"\bindemnif(y|ication)\b|\bthird-party claims\b"),
+    ("termination", r"\bterminate\b|\btermination\b|\bwritten notice\b"),
+    ("confidentiality", r"\bconfidential\b|\bproprietary information\b"),
+    ("scope_of_services", r"\bshall provide\b|\bservices\b"),
+]
+```
+
+**Location:** `components.py:10-18`
+
+### Pattern Design
+
+Each pattern uses:
+
+- **Word boundaries** (`\b`) - Ensures "penalties" matches but "penalties-related" doesn't match incorrectly
+- **Alternation** (`|`) - Captures variations ("penalty" or "penalties")
+- **Case-insensitive matching** (`re.IGNORECASE`) - Handles "Penalty", "PENALTY", "penalty"
+
+<Tip>
+Patterns are checked in order. More specific patterns (like "indemnification") should appear before generic ones (like "payment_terms") to ensure accurate classification.
+</Tip>
+
+## Entity Extraction
+
+**Method:** `_extract_entities(query: str) -> List[str]`
+
+```python
+stopwords = {"the", "is", "in", "at", "of", "for", "and", "a", "to", "what", "are", "on", "with", "by"}
+words = re.findall(r"\b\w+\b", query.lower())
+return [w for w in words if w not in stopwords]
+```
+
+**Location:** `components.py:24-27`
+
+Extracts meaningful terms for matching:
+
+- Splits query into words
+- Filters common stopwords
+- Returns lowercase terms for case-insensitive matching
+
+### Example
+
+```python
+Query: "What are the late payment penalties?"
+Entities: ["late", "payment", "penalties"]
+```
+
+These entities are later used by the AgenticRetriever for scoring sections.
+
+## Constraint Extraction
+
+**Method:** `_extract_constraints(query: str) -> Dict`
+
+### Timeframe Patterns
+
+```python
+time_match = re.search(r"\bwithin (\d+ (days|weeks|months|years))\b", query, re.IGNORECASE)
+if time_match:
+    constraints["timeframe"] = time_match.group(1)
+```
+
+**Location:** `components.py:32-33`
+
+**Examples:**
+- "within 30 days" → `{"timeframe": "30 days"}`
+- "within 2 months" → `{"timeframe": "2 months"}`
+
+### Percentage Patterns
+
+```python
+percentage_match = re.search(r"\b(\d+(\.\d+)?)%\b", query)
+if percentage_match:
+    constraints["percentage"] = percentage_match.group(1)
+```
+
+**Location:** `components.py:34-36`
+
+**Examples:**
+- "1.5% late fee" → `{"percentage": "1.5"}`
+- "5% penalty" → `{"percentage": "5"}`
+
+## Temporal Extraction
+
+**Method:** `_extract_temporals(query: str) -> List[str]`
+
+```python
+date_match = re.search(r"\b(on|by|before|after) (\w+ \d{1,2}(, \d{4})?)\b", query, re.IGNORECASE)
+if date_match:
+    temporals.append(date_match.group(2))
+```
+
+**Location:** `components.py:41-44`
+
+**Examples:**
+- "by December 15, 2024" → `["December 15, 2024"]`
+- "before March 1" → `["March 1"]`
+
+## Design Rationale
+
+### Why Regex Instead of Embeddings?
+
+From README.md:9:
+
+<Info>
+"I used regex instead of embeddings because legal documents use consistent terminology. Regex gives deterministic control and avoids false positives from semantic similarity. 'Penalty' and 'penalize' might be similar vectors but mean different things in context. Also faster than API calls."
+</Info>
+
+### Trade-offs
+
+From README.md:11:
+
+<Warning>
+"Trade-off: if vocabulary grows significantly, this would need a trained classifier."
+</Warning>
+
+**Advantages:**
+- ✅ Deterministic and testable
+- ✅ No API latency (200-500ms saved)
+- ✅ No token costs
+- ✅ Exact control over matching logic
+
+**Disadvantages:**
+- ❌ Doesn't generalize beyond defined patterns
+- ❌ Requires manual updates for new vocabulary
+- ❌ Can't handle paraphrasing or synonyms
+
+## Usage Example
+
+```python
+from components import QueryDecomposer
+
+decomposer = QueryDecomposer()
+result = await decomposer.decompose("What are the late payment penalties?")
+
+print(result)
+# Output:
+# {
+#   "intent": "penalty",
+#   "entities": ["late", "payment", "penalties"],
+#   "constraints": {},
+#   "temporals": []
+# }
+```
+
+## Integration with Workflow
+
+The decomposition result flows to the AgenticRetriever:
+
+```python
+# nodes.py:7-12
+async def decompose_node(state: DocMindState) -> DocMindState:
+    decomposer = QueryDecomposer()
+    decomposition = await decomposer.decompose(state["query"])
+    state["decomposition"] = decomposition
+    state["node_history"] = state.get("node_history", []) + ["decompose"]
+    return state
+```
+
+**Location:** `nodes.py:7-12`
+
+The retriever uses:
+- `intent` - Maps to relevant document sections
+- `entities` - Scores content matches
+- `constraints` - Validates numerical claims
+- `temporals` - Validates temporal claims
+
+## Testing
+
+Each extraction method is independently testable:
+
+```python
+# Test intent extraction
+assert decomposer._extract_intent("What are the penalties?") == "penalty"
+assert decomposer._extract_intent("Who owns the IP?") == "intellectual_property"
+
+# Test entity extraction
+assert "payment" in decomposer._extract_entities("late payment terms")
+assert "the" not in decomposer._extract_entities("What is the penalty?")
+
+# Test constraint extraction
+result = decomposer._extract_constraints("within 30 days")
+assert result["timeframe"] == "30 days"
+```
+
+## Extending the Decomposer
+
+To add new intents:
+
+1. Add pattern to `intent_map` in priority order
+2. Update `AgenticRetriever.INTENT_SECTION_MAP`
+3. Add test cases
+
+```python
+# Add warranty intent
+("warranty", r"\bwarrant(y|ies)\b|\bguarantee\b|\brepresentation\b"),
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agentic Retrieval" icon="database" href="/concepts/agentic-retrieval">
+    See how decomposition enables strategic retrieval
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the full system design
+  </Card>
+</CardGroup>

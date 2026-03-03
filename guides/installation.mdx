@@ -1,0 +1,157 @@
+---
+title: Installation
+description: Set up DocMind with all required dependencies and verify your installation
+icon: download
+---
+
+DocMind is a Python-based document intelligence system built with LangGraph. Follow these steps to get started.
+
+## Prerequisites
+
+Before installing DocMind, ensure you have:
+
+- Python 3.13 or higher
+- pip package manager
+- Git (optional, for cloning the repository)
+
+## Installation Steps
+
+<Steps>
+  <Step title="Install Dependencies">
+    DocMind uses Poetry for dependency management. The core dependencies are defined in `pyproject.toml`:
+
+    ```toml pyproject.toml
+    [project]
+    name = "gio-custom-assesment"
+    version = "0.1.0"
+    requires-python = ">=3.13,<4.0"
+    dependencies = [
+        "langgraph (>=1.0.7,<2.0.0)",
+        "pytest (>=9.0.2,<10.0.0)"
+    ]
+    ```
+
+    Install using pip:
+
+    <CodeGroup>
+    ```bash pip
+    pip install langgraph>=1.0.7 pytest>=9.0.2
+    ```
+
+    ```bash Poetry
+    poetry install
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Verify Installation">
+    Check that LangGraph is correctly installed:
+
+    ```bash
+    python -c "import langgraph; print(langgraph.__version__)"
+    ```
+
+    Expected output:
+    ```
+    1.0.7
+    ```
+  </Step>
+
+  <Step title="Set Up Project Structure">
+    DocMind follows this structure:
+
+    ```
+    docmind/
+    ├── components.py       # Core components (Retriever, Judge, etc.)
+    ├── nodes.py           # Workflow nodes
+    ├── workflow.py        # LangGraph workflow definition
+    ├── state_types.py     # State type definitions
+    ├── mock_data.py       # Sample contract data
+    ├── logger.py          # Logging utilities
+    ├── starter.py         # Main entry point
+    └── test_starter.py    # Test suite
+    ```
+
+    All files should be in the same directory for proper imports.
+  </Step>
+
+  <Step title="Run Quick Test">
+    Verify your installation by running the starter script:
+
+    ```bash
+    python starter.py
+    ```
+
+    You should see output like:
+
+    ```
+    ================================================================================
+    Query 1: What are the penalties for late payment?
+    ================================================================================
+
+    Response: If payment is not received within thirty (30) days, Client shall 
+    be assessed a late fee of 1.5% per month (18% annually) on the outstanding 
+    balance. (See Late Payment Penalties, page 8)
+    ```
+  </Step>
+</Steps>
+
+## Dependency Details
+
+<Accordion title="LangGraph (>=1.0.7)">
+  LangGraph is the core orchestration framework for DocMind. It provides:
+  
+  - **StateGraph**: State management across workflow nodes
+  - **Conditional routing**: Retry logic based on judge verdicts
+  - **Async execution**: Efficient async/await patterns
+  
+  Used in `workflow.py:6-34` to build the document intelligence workflow.
+</Accordion>
+
+<Accordion title="Pytest (>=9.0.2)">
+  Pytest is used for the comprehensive test suite covering:
+  
+  - Strategic retrieval tests (Test Set A)
+  - LLM-as-Judge evaluation tests (Test Set B)
+  - End-to-end workflow tests (Test Set C)
+  
+  See [Testing Guide](/guides/testing) for details on running the test suite.
+</Accordion>
+
+## Troubleshooting
+
+<Warning>
+  If you encounter `ModuleNotFoundError: No module named 'langgraph'`, ensure you're using Python 3.13+ and have activated your virtual environment.
+</Warning>
+
+### Common Issues
+
+**Import errors with relative imports**
+
+Ensure all files are in the same directory. The project uses relative imports:
+
+```python starter.py
+from state_types import DocMindState
+from workflow import build_graph_workflow
+from logger import log_workflow_complete
+```
+
+**Python version mismatch**
+
+DocMind requires Python 3.13 or higher due to modern type hint syntax:
+
+```bash
+python --version
+# Should show: Python 3.13.x or higher
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Running Queries" icon="play" href="/guides/running-queries">
+    Learn how to run queries and interpret results
+  </Card>
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Run the comprehensive test suite
+  </Card>
+</CardGroup>

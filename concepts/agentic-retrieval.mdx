@@ -1,0 +1,363 @@
+---
+title: "Agentic Retrieval"
+description: "Strategic document section selection using multi-signal scoring and intent mapping"
+---
+
+## The Problem
+
+Semantic search returns "similar" documents but not always the **right** ones. Searching for "late payment" might return generic "payment terms" sections that don't mention penalties.
+
+From README.md:14-16:
+
+<Info>
+"The problem: semantic search returns 'similar' documents but not always the right ones. Searching 'late payment' might return generic 'payment terms' sections."
+</Info>
+
+AgenticRetriever solves this with **strategy-based retrieval** that combines intent mapping, entity matching, and relevance scoring.
+
+## Implementation
+
+**Location:** `components.py:66-144`
+
+## Search Strategies
+
+From README.md:17-21:
+
+```python
+# Three search strategies based on intent:
+
+1. full_text - For IP and indemnification
+   → Exact term matches required
+   → "Indemnification" should NOT return "liability"
+
+2. hybrid - For payment, penalties, termination
+   → Combines exact matches with variations
+   → "Late payment" = "overdue payment"
+
+3. vector - For unknown intents
+   → Fallback when intent is unclear
+```
+
+Currently, the system uses full_text search as the primary mechanism:
+
+```python
+# components.py:119
+all_sections = await self.doc_store.full_text_search(query)
+```
+
+## Intent-to-Section Mapping
+
+The retriever maintains explicit mappings from query intents to document sections:
+
+```python
+INTENT_SECTION_MAP = {
+    "penalty": ["Late Payment Penalties", "Payment Terms"],
+    "payment_terms": ["Payment Terms", "Late Payment Penalties"],
+    "intellectual_property": ["Intellectual Property Rights"],
+    "indemnification": ["Indemnification"],
+    "termination": ["Termination for Convenience"],
+    "confidentiality": ["Confidentiality"],
+    "scope_of_services": ["Scope of Services"],
+}
+```
+
+**Location:** `components.py:67-75`
+
+<Tip>
+The first section in each list is the **primary match** and receives a +2.0 scoring bonus. Secondary sections get +5.0 but no primary bonus.
+</Tip>
+
+## Multi-Signal Scoring
+
+**Method:** `_score_section(section, query, decomposition) -> float`
+
+From README.md:23-25:
+
+<Info>
+"The scoring system combines multiple signals. Intent mapping has the highest weight (5-7 points) because if we know the user wants 'penalty', the 'Late Payment Penalties' section is almost certainly relevant."
+</Info>
+
+### Scoring Formula
+
+```python
+def _score_section(self, section: Dict, query: str, decomposition: Dict) -> float:
+    score = 0.0
+    
+    # 1. Intent-based scoring (highest priority)
+    intent = decomposition.get("intent", "unknown")
+    target_sections = self.INTENT_SECTION_MAP.get(intent, [])
+    
+    if section["title"] in target_sections:
+        score += 5.0  # Base intent match
+        if section["title"] == target_sections[0]:  # Primary match
+            score += 2.0
+    
+    # 2. Entity matching
+    entities = decomposition.get("entities", [])
+    for entity in entities:
+        if entity in content_lower:
+            score += 1.0  # Entity in content
+        if entity in title_lower:
+            score += 1.5  # Entity in title (more descriptive)
+    
+    # 3. Query term matching (tiebreaker)
+    query_terms = query.lower().split()
+    for term in query_terms:
+        if len(term) > 3 and term in content_lower:
+            score += 0.5
+    
+    return score
+```
+
+**Location:** `components.py:80-107`
+
+### Scoring Breakdown
+
+| Signal | Weight | Rationale |
+|--------|--------|----------|
+| **Primary intent match** | +7.0 | (5.0 base + 2.0 bonus) Section is exactly what user wants |
+| **Secondary intent match** | +5.0 | Section is relevant to intent |
+| **Entity in title** | +1.5 | Titles are more descriptive than content |
+| **Entity in content** | +1.0 | Entity appears in section text |
+| **Query term match** | +0.5 | For tiebreaking similar sections |
+
+From README.md:24:
+
+<Info>
+"Entity matches in titles get 1.5 points (titles are more descriptive), in content 1.0. Query terms get 0.5 for tiebreaking."
+</Info>
+
+## Relevance Filtering
+
+**Method:** `_filter_irrelevant(sections, threshold=1.0) -> List[Dict]`
+
+```python
+def _filter_irrelevant(self, sections: List[Dict], threshold: float = 1.0) -> List[Dict]:
+    return [s for s in sections if s.get("_relevance_score", 0) >= threshold]
+```
+
+**Location:** `components.py:109-111`
+
+The retriever applies a **2.0 threshold** to ensure quality:
+
+```python
+relevant = self._filter_irrelevant(scored_sections, threshold=2.0)
+```
+
+**Location:** `components.py:135`
+
+From README.md:25-26:
+
+<Info>
+"I set the relevance threshold at 2.0. This ensures at least one entity appears in the title or there's an intent match. Determined empirically from the test cases."
+</Info>
+
+### What 2.0 Means
+
+A section must have **at least one** of:
+
+- One entity in title (1.5) + one entity in content (1.0) = 2.5 ✅
+- Two entities in title (1.5 × 2) = 3.0 ✅
+- Intent match (5.0+) = 5.0+ ✅
+- One entity in title (1.5) + one query term (0.5) = 2.0 ✅
+
+<Warning>
+Sections with only content matches (score < 2.0) are filtered as likely noise.
+</Warning>
+
+## Retrieval Algorithm
+
+**Method:** `retrieve(query, decomposition) -> List[Dict]`
+
+```python
+async def retrieve(self, query: str, decomposition: Dict) -> List[Dict]:
+    # Step 1: Get candidate sections from document store
+    all_sections = await self.doc_store.full_text_search(query)
+    
+    if not all_sections:
+        all_sections = await self.doc_store.get_document_sections(SAMPLE_CONTRACT["doc_id"])
+    
+    # Step 2: Score each section
+    scored_sections = []
+    for section in all_sections:
+        score = self._score_section(section, query, decomposition)
+        score += section.get("_text_boost", 0.0)  # Apply text search boost
+        section_copy = section.copy()
+        section_copy["_relevance_score"] = score
+        scored_sections.append(section_copy)
+    
+    # Step 3: Sort by score (highest first)
+    scored_sections.sort(key=lambda x: x["_relevance_score"], reverse=True)
+    
+    # Step 4: Filter irrelevant (score < 2.0)
+    relevant = self._filter_irrelevant(scored_sections, threshold=2.0)
+    
+    # Step 5: Return top 3-5 sections
+    if not relevant:
+        relevant = scored_sections[:1]  # At least return something
+    else:
+        relevant = relevant[:5]  # Cap at 5 sections
+    
+    return relevant
+```
+
+**Location:** `components.py:114-144`
+
+## Example: Late Payment Query
+
+```python
+query = "What are the late payment penalties?"
+decomposition = {
+    "intent": "penalty",
+    "entities": ["late", "payment", "penalties"],
+    "constraints": {},
+    "temporals": []
+}
+```
+
+### Scoring Process
+
+**Section: "Late Payment Penalties" (page 8)**
+- Intent match (primary): +7.0
+- "late" in title: +1.5
+- "payment" in title: +1.5
+- "penalties" in title: +1.5
+- "late" in content: +1.0
+- "payment" in content: +1.0
+- **Total: 13.5** ✅
+
+**Section: "Payment Terms" (page 3)**
+- Intent match (secondary): +5.0
+- "payment" in title: +1.5
+- "payment" in content: +1.0
+- **Total: 7.5** ✅
+
+**Section: "Confidentiality" (page 20)**
+- No intent match: 0.0
+- No entity matches: 0.0
+- **Total: 0.0** ❌ (filtered)
+
+### Final Result
+
+```python
+[
+  {"title": "Late Payment Penalties", "page_num": 8, "_relevance_score": 13.5},
+  {"title": "Payment Terms", "page_num": 3, "_relevance_score": 7.5}
+]
+```
+
+## Integration with Workflow
+
+```python
+# nodes.py:14-20
+async def retrieve_node(state: DocMindState) -> DocMindState:
+    store = MockDocumentStore()
+    retriever = AgenticRetriever(store)
+    sections = await retriever.retrieve(state["query"], state["decomposition"])
+    state["retrieved_sections"] = sections
+    state["node_history"] = state.get("node_history", []) + ["retrieve"]
+    return state
+```
+
+**Location:** `nodes.py:14-20`
+
+## Retry Mechanism
+
+If the LLMJudge detects hallucinations, the workflow retries retrieval:
+
+```python
+# workflow.py:23-29
+workflow.add_conditional_edges(
+    "judge",
+    should_retry,
+    {
+        "retry": "retrieve",  # Try again with same query
+        "output": "output"
+    }
+)
+```
+
+**Location:** `workflow.py:23-29`
+
+From README.md:47-48:
+
+<Info>
+"If the judge detects hallucination, the system retries retrieval. Maximum 2 retries to avoid infinite loops."
+</Info>
+
+## Document Store Interface
+
+The retriever depends on a document store providing:
+
+```python
+class MockDocumentStore:
+    async def full_text_search(self, query: str, top_k: int = 5) -> List[Dict]:
+        # Returns sections matching query terms
+        pass
+    
+    async def get_document_sections(self, doc_id: str) -> List[Dict]:
+        # Returns all sections in document
+        pass
+```
+
+**Location:** `mock_data.py:19-31`
+
+Each section includes:
+- `section_id` - Unique identifier
+- `title` - Section heading
+- `page_num` - Page number for citation
+- `content` - Section text
+
+## Design Trade-offs
+
+### Fixed Thresholds vs Adaptive
+
+From README.md:58:
+
+<Info>
+"Why fixed threshold instead of adaptive: simplicity for this scope. In production it would be calibrated with a validation dataset."
+</Info>
+
+### Manual Scoring vs Learning
+
+From README.md:61:
+
+<Warning>
+"Manual scoring doesn't learn from feedback."
+</Warning>
+
+In production, you could:
+- Track user feedback (helpful/not helpful)
+- A/B test different scoring weights
+- Train a ranking model on historical queries
+
+## Testing
+
+```python
+from components import AgenticRetriever
+from mock_data import MockDocumentStore
+
+# Test scoring
+retriever = AgenticRetriever(MockDocumentStore())
+section = {"title": "Late Payment Penalties", "content": "late fee of 1.5%", "page_num": 8}
+decomp = {"intent": "penalty", "entities": ["late", "payment"]}
+
+score = retriever._score_section(section, "late payment", decomp)
+assert score >= 7.0  # Should have intent match + entity matches
+
+# Test retrieval
+sections = await retriever.retrieve("What are the penalties?", decomp)
+assert len(sections) > 0
+assert sections[0]["title"] == "Late Payment Penalties"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Query Decomposition" icon="magnifying-glass" href="/concepts/query-decomposition">
+    Understand how queries are parsed
+  </Card>
+  <Card title="LLM Judge" icon="gavel" href="/concepts/llm-judge">
+    See how responses are validated
+  </Card>
+</CardGroup>

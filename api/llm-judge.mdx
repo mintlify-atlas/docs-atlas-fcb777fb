@@ -1,0 +1,329 @@
+---
+title: "LLMJudge"
+description: "Hallucination detection system with claim extraction, grounding verification, and confidence scoring"
+---
+
+## Overview
+
+The `LLMJudge` class evaluates generated responses for hallucinations by extracting claims, verifying them against source documents, detecting contradictions, and computing confidence scores. It implements a structured rubric-based evaluation system.
+
+## Class Definition
+
+```python
+class LLMJudge:
+    async def evaluate(self, response: str, context: List[Dict]) -> Dict
+```
+
+## Methods
+
+### evaluate
+
+Performs hallucination detection with structured rubric evaluation.
+
+```python
+async def evaluate(self, response: str, context: List[Dict]) -> Dict
+```
+
+<ParamField path="response" type="str" required>
+  The generated response text to evaluate
+</ParamField>
+
+<ParamField path="context" type="List[Dict]" required>
+  Retrieved document sections used to generate the response. Each section should contain:
+  <ParamField path="title" type="str">
+    Section title
+  </ParamField>
+  <ParamField path="content" type="str">
+    Section content text
+  </ParamField>
+</ParamField>
+
+<ResponseField name="claims" type="List[Dict]">
+  List of extracted and evaluated claims
+  <ResponseField name="text" type="str">
+    The claim statement text
+  </ResponseField>
+  <ResponseField name="type" type="str">
+    Claim type: `quantitative`, `temporal`, `obligation`, or `general`
+  </ResponseField>
+  <ResponseField name="found_in_source" type="bool">
+    Whether a supporting quote was found
+  </ResponseField>
+  <ResponseField name="source_quote" type="str | None">
+    The supporting quote from source documents (if found)
+  </ResponseField>
+  <ResponseField name="status" type="str">
+    Claim status: `supported`, `unsupported`, or `contradicted`
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="confidence_score" type="float">
+  Confidence score between 0.0 and 1.0 (rounded to 2 decimals)
+</ResponseField>
+
+<ResponseField name="is_hallucinated" type="bool">
+  True if response contains contradictions or confidence < 0.5
+</ResponseField>
+
+<ResponseField name="should_return" type="bool">
+  Whether the response should be returned to the user (opposite of is_hallucinated)
+</ResponseField>
+
+<ResponseField name="summary" type="Dict">
+  Aggregate statistics
+  <ResponseField name="total_claims" type="int">
+    Total number of claims extracted
+  </ResponseField>
+  <ResponseField name="supported" type="int">
+    Number of supported claims
+  </ResponseField>
+  <ResponseField name="unsupported" type="int">
+    Number of unsupported claims
+  </ResponseField>
+  <ResponseField name="contradicted" type="int">
+    Number of contradicted claims
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="reasoning" type="str">
+  Human-readable explanation of the evaluation
+</ResponseField>
+
+#### Example
+
+```python
+judge = LLMJudge()
+
+response = "The late payment penalty is 2% of the outstanding balance. Payment is due within 30 days of invoice receipt. (See Late Payment Penalties, page 5)"
+
+context = [
+    {
+        "title": "Late Payment Penalties",
+        "content": "A late fee of 1.5% per month (18% annually) will apply to outstanding balances. Payment is due within 30 days of invoice receipt.",
+        "page_num": 5
+    }
+]
+
+verdict = await judge.evaluate(response, context)
+
+print(f"Confidence: {verdict['confidence_score']}")
+print(f"Hallucinated: {verdict['is_hallucinated']}")
+print(f"Should return: {verdict['should_return']}")
+
+# Output:
+# Confidence: 0.2  (low due to contradicted claim)
+# Hallucinated: True (2% contradicts 1.5% in source)
+# Should return: False
+```
+
+## Evaluation Process
+
+The judge uses a 4-phase evaluation process:
+
+### Phase 1: Extract Claims
+
+Claims are extracted using pattern matching for different claim types.
+
+### Phase 2: Ground Claims
+
+Each claim is verified against source documents to find supporting evidence.
+
+### Phase 3: Detect Contradictions
+
+Claims are checked for contradictions with source content (especially quantitative values).
+
+### Phase 4: Calculate Confidence
+
+A weighted scoring system computes overall confidence:
+
+```python
+confidence_score = 1.0
+confidence_score -= (contradicted_count / total_claims) * 0.8  # Heavy penalty
+confidence_score -= (unsupported_count / total_claims) * 0.3   # Moderate penalty
+confidence_score = max(0.0, min(1.0, confidence_score))
+```
+
+**Scoring Weights:**
+- **Contradicted claim**: -0.8 penalty (severe)
+- **Unsupported claim**: -0.3 penalty (moderate)
+- **Supported claim**: No penalty
+
+**Hallucination Threshold:** `contradicted_count > 0 OR confidence_score < 0.5`
+
+## Private Helper Methods
+
+### _extract_claims
+
+Extracts claims from the response using pattern matching.
+
+```python
+def _extract_claims(self, response: str) -> List[Dict]
+```
+
+**Claim Types and Patterns:**
+
+1. **Quantitative Claims** (numbers, percentages)
+   - Pattern: `r'([^.]*\d+(?:\.\d+)?%?[^.]*.)'`
+   - Example: "The fee is 2% of the balance."
+
+2. **Temporal Claims** (timeframes, deadlines)
+   - Pattern: `r'([^.]*(?:within|after|before|\d+\s*days?|\d+\s*months?|\d+\s*years?)[^.]*.)' `
+   - Example: "Payment is due within 30 days."
+
+3. **Obligation Claims** (requirements, mandates)
+   - Pattern: `r'([^.]*(?:shall|must|will|is required)[^.]*.)' `
+   - Example: "The vendor shall provide weekly updates."
+
+4. **General Claims** (fallback)
+   - Sentences longer than 20 characters when no structured claims found
+
+**Example:**
+```python
+response = "The late fee is 2% per month. Payment must be made within 30 days."
+claims = judge._extract_claims(response)
+# [
+#   {"text": "The late fee is 2% per month.", "type": "quantitative"},
+#   {"text": "Payment must be made within 30 days.", "type": "temporal"}
+# ]
+```
+
+### _find_supporting_quote
+
+Searches for supporting evidence in source documents.
+
+```python
+def _find_supporting_quote(self, claim: str, context: List[Dict]) -> Optional[str]
+```
+
+**Matching Strategy:**
+
+1. **Number Matching (Strict)** - For quantitative claims
+   - Extracts numbers from claim and content
+   - Finds sentences containing matching numbers
+   - Example: "2%" in claim must match "2%" in source
+
+2. **Key Phrase Matching** - For all claims
+   - Extracts significant words (4+ characters)
+   - Requires 3+ overlapping words between claim and content
+   - Requires 2+ overlapping words in a specific sentence
+
+**Example:**
+```python
+claim = "Payment is due within 30 days"
+context = [{"content": "Invoice payment is due within 30 days of receipt."}]
+quote = judge._find_supporting_quote(claim, context)
+# "Invoice payment is due within 30 days of receipt."
+```
+
+### _check_contradiction
+
+Detects contradictions between claims and source documents.
+
+```python
+def _check_contradiction(self, claim: str, context: List[Dict]) -> bool
+```
+
+**Contradiction Detection:**
+
+1. **Percentage Contradictions**
+   - Extracts percentages from claim and content
+   - Checks for mismatches in payment/fee contexts
+   - Example: Claim says "2%" but source says "1.5%"
+
+2. **Timeframe Contradictions**
+   - Extracts day counts from claim and content
+   - Checks for mismatches in payment contexts
+   - Example: Claim says "30 days" but source says "15 days"
+
+**Context-Aware Matching:**
+```python
+# Only flags contradiction if both claim and source discuss same topic
+payment_keywords = ["payment", "pay", "due", "within", "invoice", "receipt"]
+```
+
+**Example:**
+```python
+claim = "The late fee is 2% per month"
+context = [{"content": "A late fee of 1.5% per month will apply"}]
+is_contradicted = judge._check_contradiction(claim, context)
+# True (2% != 1.5%)
+```
+
+## Confidence Scoring Examples
+
+### Example 1: Perfect Response
+```python
+# 3 claims, all supported
+confidence = 1.0 - (0/3)*0.8 - (0/3)*0.3 = 1.0
+# Result: 1.0, not hallucinated
+```
+
+### Example 2: Unsupported Claims
+```python
+# 5 claims: 3 supported, 2 unsupported
+confidence = 1.0 - (0/5)*0.8 - (2/5)*0.3 = 0.88
+# Result: 0.88, not hallucinated (>0.5)
+```
+
+### Example 3: Contradiction
+```python
+# 4 claims: 2 supported, 1 unsupported, 1 contradicted
+confidence = 1.0 - (1/4)*0.8 - (1/4)*0.3 = 0.625
+# Result: 0.62, HALLUCINATED (contradicted_count > 0)
+```
+
+### Example 4: Low Confidence
+```python
+# 3 claims: 1 supported, 2 unsupported
+confidence = 1.0 - (0/3)*0.8 - (2/3)*0.3 = 0.8
+# But if: 3 claims: 0 supported, 3 unsupported
+confidence = 1.0 - (0/3)*0.8 - (3/3)*0.3 = 0.7
+# And if: 2 claims: 0 supported, 2 unsupported
+confidence = 1.0 - (0/2)*0.8 - (2/2)*0.3 = 0.7
+```
+
+## Usage Example
+
+```python
+from components import LLMJudge, ResponseGenerator, AgenticRetriever
+
+# Generate response
+generator = ResponseGenerator()
+response = generator.generate(retrieved_sections)
+
+# Evaluate for hallucinations
+judge = LLMJudge()
+verdict = await judge.evaluate(response, retrieved_sections)
+
+if verdict["should_return"]:
+    print("Response is grounded and safe to return")
+    print(f"Confidence: {verdict['confidence_score']}")
+    print(response)
+else:
+    print("Response contains hallucinations")
+    print(f"Confidence: {verdict['confidence_score']}")
+    print(f"Contradicted: {verdict['summary']['contradicted']}")
+    print(f"Unsupported: {verdict['summary']['unsupported']}")
+    
+    # Show problematic claims
+    for claim in verdict["claims"]:
+        if claim["status"] != "supported":
+            print(f"\n{claim['status'].upper()}: {claim['text']}")
+```
+
+## Integration
+
+The judge is the final validation step before returning responses to users:
+
+```python
+# Full RAG pipeline with hallucination detection
+decomposition = await decomposer.decompose(query)
+sections = await retriever.retrieve(query, decomposition)
+response = generator.generate(sections)
+verdict = await judge.evaluate(response, sections)  # <- LLMJudge
+
+if verdict["should_return"]:
+    return response
+else:
+    return "I don't have enough information to answer confidently."
+```

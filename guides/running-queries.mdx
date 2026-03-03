@@ -1,0 +1,350 @@
+---
+title: Running Queries
+description: Execute queries against DocMind and understand the workflow results
+icon: play
+---
+
+DocMind processes natural language queries through a multi-stage workflow involving decomposition, retrieval, generation, and evaluation.
+
+## Quick Start
+
+The simplest way to run queries is using the `run_docmind` function:
+
+```python
+import asyncio
+from starter import run_docmind
+
+async def main():
+    response = await run_docmind("What are the penalties for late payment?")
+    print(response)
+
+asyncio.run(main())
+```
+
+## Understanding the Workflow
+
+DocMind uses a LangGraph workflow with 5 nodes:
+
+<Steps>
+  <Step title="Decompose">
+    The query is decomposed into structured components:
+
+    ```python components.py:46-63
+    async def decompose(self, query: str) -> Dict:
+        intent = self._extract_intent(query)
+        entities = self._extract_entities(query)
+        constraints = self._extract_constraints(query)
+        temporals = self._extract_temporals(query)
+        
+        return {
+            "intent": intent,
+            "entities": entities,
+            "constraints": constraints,
+            "temporals": temporals
+        }
+    ```
+
+    **Example Output:**
+    ```json
+    {
+      "intent": "penalty",
+      "entities": ["penalties", "late", "payment"],
+      "constraints": {},
+      "temporals": []
+    }
+    ```
+  </Step>
+
+  <Step title="Retrieve">
+    Sections are retrieved using strategic, intent-based scoring:
+
+    ```python components.py:114-144
+    async def retrieve(self, query: str, decomposition: Dict) -> List[Dict]:
+        all_sections = await self.doc_store.full_text_search(query)
+        
+        scored_sections = []
+        for section in all_sections:
+            score = self._score_section(section, query, decomposition)
+            section_copy = section.copy()
+            section_copy["_relevance_score"] = score
+            scored_sections.append(section_copy)
+        
+        scored_sections.sort(key=lambda x: x["_relevance_score"], reverse=True)
+        relevant = self._filter_irrelevant(scored_sections, threshold=2.0)
+        
+        return relevant[:5]
+    ```
+
+    Returns 3-5 most relevant sections with page numbers.
+  </Step>
+
+  <Step title="Generate">
+    A response is generated from retrieved sections:
+
+    ```python components.py:312-329
+    def generate(self, sections: List[Dict]) -> str:
+        response_parts = []
+        
+        for section in sections:
+            title = section.get("title", "Unknown")
+            page = section.get("page_num", "?")
+            content = section.get("content", "")
+            
+            sentences = re.split(r'(?<=[.!?])\s+', content)
+            key_info = sentences[0] if sentences else content[:200]
+            
+            response_parts.append(f"{key_info} (See {title}, page {page})")
+        
+        return " ".join(response_parts)
+    ```
+  </Step>
+
+  <Step title="Judge">
+    The LLM Judge evaluates the response for hallucinations:
+
+    ```python components.py:244-308
+    async def evaluate(self, response: str, context: List[Dict]) -> Dict:
+        claims = self._extract_claims(response)
+        
+        supported_count = 0
+        contradicted_count = 0
+        unsupported_count = 0
+        
+        for claim in claims:
+            source_quote = self._find_supporting_quote(claim["text"], context)
+            is_contradicted = self._check_contradiction(claim["text"], context)
+            
+            # ... claim evaluation logic ...
+        
+        confidence_score = 1.0
+        confidence_score -= (contradicted_count / total_claims) * 0.8
+        confidence_score -= (unsupported_count / total_claims) * 0.3
+        
+        return {
+            "confidence_score": round(confidence_score, 2),
+            "is_hallucinated": contradicted_count > 0 or confidence_score < 0.5,
+            "should_return": not is_hallucinated
+        }
+    ```
+  </Step>
+
+  <Step title="Output">
+    Final output is returned if judge approves:
+
+    ```python nodes.py:39-45
+    async def output_node(state: DocMindState) -> DocMindState:
+        if state["judge_verdict"] and state["judge_verdict"].get("should_return", False):
+            state["final_output"] = state["generated_response"]
+        else:
+            state["final_output"] = "Unable to provide a confident response. Please rephrase your query."
+        return state
+    ```
+  </Step>
+</Steps>
+
+## Running Multiple Queries
+
+The `starter.py` script demonstrates running multiple queries:
+
+```python starter.py:32-46
+if __name__ == "__main__":
+    async def main():
+        queries = [
+            "What are the penalties for late payment?",
+            "What are the indemnification obligations?",
+            "What happens if IP is infringed?"
+        ]
+        
+        for i, query in enumerate(queries, 1):
+            print(f"\n{'='*80}")
+            print(f"Query {i}: {query}")
+            print('='*80)
+            response = await run_docmind(query)
+            print(f"\nResponse: {response}\n")
+    
+    asyncio.run(main())
+```
+
+## Example Output
+
+<CodeGroup>
+```bash Query 1: Late Payment
+================================================================================
+Query 1: What are the penalties for late payment?
+================================================================================
+
+Response: If payment is not received within thirty (30) days, Client shall be 
+assessed a late fee of 1.5% per month (18% annually) on the outstanding balance. 
+(See Late Payment Penalties, page 8)
+```
+
+```bash Query 2: Indemnification
+================================================================================
+Query 2: What are the indemnification obligations?
+================================================================================
+
+Response: ABC Corporation shall indemnify Client against third-party claims 
+arising from ABC's negligence or willful misconduct. (See Indemnification, page 15) 
+Client shall indemnify ABC Corporation against claims arising from Client's use of 
+deliverables outside the scope of this Agreement. (See Indemnification, page 15)
+```
+
+```bash Query 3: IP Infringement
+================================================================================
+Query 3: What happens if IP is infringed?
+================================================================================
+
+Response: All work product created shall be owned by ABC Corporation unless 
+explicitly transferred via written amendment. (See Intellectual Property Rights, 
+page 12) Client receives a non-exclusive license to use deliverables for internal 
+purposes. (See Intellectual Property Rights, page 12)
+```
+</CodeGroup>
+
+## State Tracking
+
+DocMind tracks workflow state through the `DocMindState` type:
+
+```python state_types.py:3-12
+class DocMindState(TypedDict):
+    query: str
+    decomposition: Optional[Dict]
+    retrieved_sections: List[Dict]
+    generated_response: Optional[str]
+    judge_verdict: Optional[Dict]
+    final_output: Optional[str]
+    retry_count: int  # track number of retries
+    node_history: List[str]  # track nodes visited
+```
+
+### Accessing State Information
+
+```python
+from workflow import build_graph_workflow
+from state_types import DocMindState
+
+graph = build_graph_workflow()
+initial_state: DocMindState = {
+    "query": "What are the payment terms?",
+    "decomposition": None,
+    "retrieved_sections": [],
+    "generated_response": None,
+    "judge_verdict": None,
+    "final_output": None,
+    "retry_count": 0,
+    "node_history": []
+}
+
+final_state = await graph.ainvoke(initial_state)
+
+# Access results
+print(f"Intent: {final_state['decomposition']['intent']}")
+print(f"Sections retrieved: {len(final_state['retrieved_sections'])}")
+print(f"Confidence: {final_state['judge_verdict']['confidence_score']}")
+print(f"Nodes visited: {final_state['node_history']}")
+```
+
+## Retry Logic
+
+DocMind automatically retries if the judge detects hallucinations:
+
+```python nodes.py:47-55
+def should_retry(state: DocMindState) -> str:
+    verdict = state.get("judge_verdict", {})
+    retry_count = state.get("retry_count", 0)
+    
+    # retry if hallucinated and haven't exceeded max retries (2 attempts max)
+    if verdict.get("is_hallucinated", False) and retry_count < 2:
+        log_retry_attempt(retry_count + 1, 2)
+        return "retry"
+    return "output"
+```
+
+<Info>
+  The workflow supports up to 2 retry attempts. After that, it returns: "Unable to provide a confident response. Please rephrase your query."
+</Info>
+
+## Supported Query Types
+
+DocMind recognizes these intent patterns:
+
+<Accordion title="Penalty Queries">
+  **Pattern**: `late fee`, `overdue`, `penalties`
+  
+  **Example**: "What are the penalties for late payment?"
+  
+  **Intent**: `penalty`
+  
+  **Target Sections**: Late Payment Penalties, Payment Terms
+</Accordion>
+
+<Accordion title="Payment Terms">
+  **Pattern**: `pay`, `invoice`, `payment`
+  
+  **Example**: "When is payment due?"
+  
+  **Intent**: `payment_terms`
+  
+  **Target Sections**: Payment Terms, Late Payment Penalties
+</Accordion>
+
+<Accordion title="Intellectual Property">
+  **Pattern**: `owned by`, `license`, `IP`, `infringe`
+  
+  **Example**: "What happens if IP is infringed?"
+  
+  **Intent**: `intellectual_property`
+  
+  **Target Sections**: Intellectual Property Rights
+</Accordion>
+
+<Accordion title="Indemnification">
+  **Pattern**: `indemnify`, `indemnification`, `third-party claims`
+  
+  **Example**: "What are the indemnification obligations?"
+  
+  **Intent**: `indemnification`
+  
+  **Target Sections**: Indemnification
+</Accordion>
+
+<Accordion title="Termination">
+  **Pattern**: `terminate`, `termination`, `written notice`
+  
+  **Example**: "How can the contract be terminated?"
+  
+  **Intent**: `termination`
+  
+  **Target Sections**: Termination for Convenience
+</Accordion>
+
+<Accordion title="Confidentiality">
+  **Pattern**: `confidential`, `proprietary information`
+  
+  **Example**: "What are the confidentiality obligations?"
+  
+  **Intent**: `confidentiality`
+  
+  **Target Sections**: Confidentiality
+</Accordion>
+
+<Accordion title="Scope of Services">
+  **Pattern**: `shall provide`, `services`
+  
+  **Example**: "What services are provided?"
+  
+  **Intent**: `scope_of_services`
+  
+  **Target Sections**: Scope of Services
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Run the comprehensive test suite
+  </Card>
+  <Card title="Customization" icon="wrench" href="/guides/customization">
+    Customize components and extend the system
+  </Card>
+</CardGroup>

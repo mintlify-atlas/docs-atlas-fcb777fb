@@ -1,0 +1,160 @@
+---
+title: Mock Data
+description: Pre-built mock document store and sample contract data for testing
+---
+
+## MockDocumentStore
+
+A pre-built mock document store class that provides search functionality without requiring actual search infrastructure. Uses the `SAMPLE_CONTRACT` data for testing.
+
+```python
+class MockDocumentStore:
+    """Pre-built mock store so you don't have to implement search logic."""
+```
+
+### Methods
+
+#### full_text_search
+
+Performs a simple text search across the mock document sections.
+
+```python
+async def full_text_search(query: str, top_k: int = 5) -> List[Dict]
+```
+
+<ParamField path="query" type="str" required>
+  The search query string to match against section content and titles
+</ParamField>
+
+<ParamField path="top_k" type="int" default="5">
+  Maximum number of results to return
+</ParamField>
+
+<ResponseField name="return" type="List[Dict]">
+  List of matching section dictionaries, each containing:
+  - `section_id`: Unique section identifier
+  - `title`: Section title
+  - `page_num`: Page number in the document
+  - `content`: Full section content
+</ResponseField>
+
+**Example**
+
+```python
+store = MockDocumentStore()
+results = await store.full_text_search("payment", top_k=3)
+# Returns sections matching "payment" in title or content
+```
+
+#### get_document_sections
+
+Retrieves all sections for a given document ID.
+
+```python
+async def get_document_sections(doc_id: str) -> List[Dict]
+```
+
+<ParamField path="doc_id" type="str" required>
+  The document identifier (currently only supports "service_agreement_2024")
+</ParamField>
+
+<ResponseField name="return" type="List[Dict]">
+  List of all sections in the document
+</ResponseField>
+
+**Example**
+
+```python
+sections = await store.get_document_sections("service_agreement_2024")
+print(f"Document has {len(sections)} sections")
+```
+
+---
+
+## SAMPLE_CONTRACT
+
+A pre-loaded sample Master Service Agreement contract used for testing and demonstrations.
+
+### Structure
+
+```python
+SAMPLE_CONTRACT: Dict = {
+    "doc_id": str,
+    "title": str,
+    "sections": List[Dict]
+}
+```
+
+### Document Details
+
+<ParamField path="doc_id" type="str">
+  Document identifier: `"service_agreement_2024"`
+</ParamField>
+
+<ParamField path="title" type="str">
+  Document title: `"Master Service Agreement 2024"`
+</ParamField>
+
+<ParamField path="sections" type="List[Dict]">
+  List of 7 contract sections, each containing:
+  - `section_id`: Unique identifier (s1-s7)
+  - `title`: Section title
+  - `page_num`: Page number in the document
+  - `content`: Full text content of the section
+</ParamField>
+
+### Section Overview
+
+| Section ID | Title | Page | Key Topics |
+|------------|-------|------|------------|
+| s1 | Scope of Services | 1 | Service description |
+| s2 | Payment Terms | 3 | 30-day payment window |
+| s3 | Late Payment Penalties | 8 | 1.5% monthly late fee, suspension after 60 days |
+| s4 | Intellectual Property Rights | 12 | Ownership and licensing |
+| s5 | Indemnification | 15 | Mutual indemnification clauses |
+| s6 | Termination for Convenience | 18 | 30-day notice, surviving provisions |
+| s7 | Confidentiality | 20 | 3-year confidentiality period |
+
+### Example Data Structure
+
+```python
+{
+    "doc_id": "service_agreement_2024",
+    "title": "Master Service Agreement 2024",
+    "sections": [
+        {
+            "section_id": "s2",
+            "title": "Payment Terms",
+            "page_num": 3,
+            "content": "Client shall pay invoices within thirty (30) days of receipt."
+        },
+        {
+            "section_id": "s3",
+            "title": "Late Payment Penalties",
+            "page_num": 8,
+            "content": "If payment is not received within thirty (30) days, Client shall be assessed a late fee of 1.5% per month (18% annually) on the outstanding balance.\n\nAfter 60 days overdue, the engagement may be suspended."
+        }
+        # ... more sections
+    ]
+}
+```
+
+### Usage Example
+
+```python
+from mock_data import SAMPLE_CONTRACT, MockDocumentStore
+
+# Access document metadata
+print(f"Document: {SAMPLE_CONTRACT['title']}")
+print(f"Total sections: {len(SAMPLE_CONTRACT['sections'])}")
+
+# Access specific sections
+for section in SAMPLE_CONTRACT['sections']:
+    if 'payment' in section['title'].lower():
+        print(f"{section['title']} (Page {section['page_num']})")
+        print(section['content'])
+
+# Use with MockDocumentStore
+store = MockDocumentStore()
+results = await store.full_text_search("indemnify")
+```

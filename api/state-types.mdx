@@ -1,0 +1,343 @@
+---
+title: 'DocMindState'
+description: 'TypedDict defining the state structure for the DocMind workflow'
+---
+
+## Overview
+
+The `DocMindState` TypedDict defines the shared state that flows through all nodes in the DocMind workflow. It tracks the query, intermediate results, retry logic, and execution history.
+
+## Type Definition
+
+```python
+from typing import TypedDict, List, Optional, Dict
+
+class DocMindState(TypedDict):
+    query: str
+    decomposition: Optional[Dict]
+    retrieved_sections: List[Dict]
+    generated_response: Optional[str]
+    judge_verdict: Optional[Dict]
+    final_output: Optional[str]
+    retry_count: int
+    node_history: List[str]
+```
+
+## State Fields
+
+### query
+
+<ParamField path="query" type="str" required>
+  The original user query that initiated the workflow
+</ParamField>
+
+**Set by:** Initial workflow invocation
+
+**Used by:** `decompose_node`, `retrieve_node`
+
+**Example:**
+```python
+state["query"] = "How do I configure authentication in DocMind?"
+```
+
+---
+
+### decomposition
+
+<ParamField path="decomposition" type="Optional[Dict]">
+  Structured breakdown of the query into sub-queries and intent
+</ParamField>
+
+**Set by:** `decompose_node`
+
+**Used by:** `retrieve_node`
+
+**Initial value:** `None`
+
+**Example:**
+```python
+state["decomposition"] = {
+    "intent": "configuration",
+    "sub_queries": [
+        "authentication setup",
+        "auth configuration options"
+    ]
+}
+```
+
+---
+
+### retrieved_sections
+
+<ParamField path="retrieved_sections" type="List[Dict]" required>
+  List of documentation sections retrieved based on the query
+</ParamField>
+
+**Set by:** `retrieve_node`
+
+**Used by:** `generate_node`, `judge_node`
+
+**Initial value:** `[]`
+
+**Example:**
+```python
+state["retrieved_sections"] = [
+    {
+        "title": "Authentication Setup",
+        "content": "To configure authentication...",
+        "source": "auth.md",
+        "relevance_score": 0.95
+    },
+    {
+        "title": "OAuth Configuration",
+        "content": "DocMind supports OAuth...",
+        "source": "oauth.md",
+        "relevance_score": 0.87
+    }
+]
+```
+
+---
+
+### generated_response
+
+<ParamField path="generated_response" type="Optional[str]">
+  Response generated from the retrieved documentation sections
+</ParamField>
+
+**Set by:** `generate_node`
+
+**Used by:** `judge_node`, `output_node`
+
+**Initial value:** `None`
+
+**Example:**
+```python
+state["generated_response"] = "To configure authentication in DocMind, you need to..."
+```
+
+---
+
+### judge_verdict
+
+<ParamField path="judge_verdict" type="Optional[Dict]">
+  Evaluation verdict from the LLM judge assessing response quality
+</ParamField>
+
+**Set by:** `judge_node`
+
+**Used by:** `should_retry` (conditional logic), `output_node`
+
+**Initial value:** `None`
+
+**Structure:**
+```python
+{
+    "is_hallucinated": bool,  # Whether response contains hallucinations
+    "should_return": bool,    # Whether response is acceptable
+    "reasoning": str          # Explanation of the verdict
+}
+```
+
+**Example:**
+```python
+state["judge_verdict"] = {
+    "is_hallucinated": False,
+    "should_return": True,
+    "reasoning": "Response is grounded in retrieved sections"
+}
+```
+
+---
+
+### final_output
+
+<ParamField path="final_output" type="Optional[str]">
+  The final output returned to the user
+</ParamField>
+
+**Set by:** `output_node`
+
+**Used by:** Workflow caller
+
+**Initial value:** `None`
+
+**Possible values:**
+- The `generated_response` if `judge_verdict.should_return` is `True`
+- `"Unable to provide a confident response. Please rephrase your query."` otherwise
+
+**Example:**
+```python
+state["final_output"] = "To configure authentication in DocMind, you need to..."
+```
+
+---
+
+### retry_count
+
+<ParamField path="retry_count" type="int" required>
+  Number of times the workflow has retried due to hallucination detection
+</ParamField>
+
+**Set by:** `judge_node` (incremented when hallucination detected)
+
+**Used by:** `should_retry` (conditional logic)
+
+**Initial value:** `0`
+
+**Maximum value:** `2` (workflow stops retrying after 2 attempts)
+
+**Increment logic:**
+```python
+if verdict.get("is_hallucinated", False):
+    state["retry_count"] = state.get("retry_count", 0) + 1
+```
+
+**Example flow:**
+```python
+# Initial state
+state["retry_count"] = 0
+
+# After first hallucination
+state["retry_count"] = 1  # Will retry
+
+# After second hallucination
+state["retry_count"] = 2  # Will NOT retry (max reached)
+```
+
+---
+
+### node_history
+
+<ParamField path="node_history" type="List[str]" required>
+  Ordered list of node names that have been executed
+</ParamField>
+
+**Set by:** Every node (appends its name)
+
+**Used by:** Debugging, logging, monitoring
+
+**Initial value:** `[]`
+
+**Example without retries:**
+```python
+state["node_history"] = [
+    "decompose",
+    "retrieve",
+    "generate",
+    "judge",
+    "output"
+]
+```
+
+**Example with one retry:**
+```python
+state["node_history"] = [
+    "decompose",
+    "retrieve",
+    "generate",
+    "judge",      # First attempt - hallucination detected
+    "retrieve",   # Retry begins
+    "generate",
+    "judge",      # Second attempt - success
+    "output"
+]
+```
+
+## State Flow Example
+
+### Successful Flow (No Retries)
+
+```python
+# Initial state
+state = {
+    "query": "How do I setup DocMind?",
+    "decomposition": None,
+    "retrieved_sections": [],
+    "generated_response": None,
+    "judge_verdict": None,
+    "final_output": None,
+    "retry_count": 0,
+    "node_history": []
+}
+
+# After decompose_node
+state["decomposition"] = {"intent": "setup", "sub_queries": [...]}
+state["node_history"] = ["decompose"]
+
+# After retrieve_node
+state["retrieved_sections"] = [{"title": "Setup Guide", ...}]
+state["node_history"] = ["decompose", "retrieve"]
+
+# After generate_node
+state["generated_response"] = "To setup DocMind, first..."
+state["node_history"] = ["decompose", "retrieve", "generate"]
+
+# After judge_node
+state["judge_verdict"] = {"is_hallucinated": False, "should_return": True}
+state["node_history"] = ["decompose", "retrieve", "generate", "judge"]
+
+# After output_node
+state["final_output"] = "To setup DocMind, first..."
+state["node_history"] = ["decompose", "retrieve", "generate", "judge", "output"]
+```
+
+### Flow with Retry
+
+```python
+# After first judge_node (hallucination detected)
+state["judge_verdict"] = {"is_hallucinated": True, "should_return": False}
+state["retry_count"] = 1
+state["node_history"] = ["decompose", "retrieve", "generate", "judge"]
+
+# should_retry returns "retry" -> back to retrieve_node
+
+# After second retrieve_node
+state["retrieved_sections"] = [{"title": "Different sections", ...}]
+state["node_history"] = ["decompose", "retrieve", "generate", "judge", "retrieve"]
+
+# After second generate_node
+state["generated_response"] = "Updated response..."
+state["node_history"] = ["decompose", "retrieve", "generate", "judge", "retrieve", "generate"]
+
+# After second judge_node (success)
+state["judge_verdict"] = {"is_hallucinated": False, "should_return": True}
+state["retry_count"] = 1  # Still 1 (only incremented on hallucination)
+state["node_history"] = [..., "generate", "judge"]
+
+# should_retry returns "output" -> proceeds to output_node
+```
+
+## Usage
+
+### Creating Initial State
+
+```python
+from state_types import DocMindState
+
+initial_state: DocMindState = {
+    "query": "How do I use the API?",
+    "decomposition": None,
+    "retrieved_sections": [],
+    "generated_response": None,
+    "judge_verdict": None,
+    "final_output": None,
+    "retry_count": 0,
+    "node_history": []
+}
+```
+
+### Accessing State in Nodes
+
+```python
+async def custom_node(state: DocMindState) -> DocMindState:
+    # Read from state
+    query = state["query"]
+    retry_count = state.get("retry_count", 0)
+    
+    # Modify state
+    state["custom_field"] = "value"
+    state["node_history"] = state.get("node_history", []) + ["custom"]
+    
+    return state
+```

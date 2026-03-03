@@ -1,0 +1,182 @@
+---
+title: "QueryDecomposer"
+description: "Decomposes natural language queries into structured components for intelligent document retrieval"
+---
+
+## Overview
+
+The `QueryDecomposer` class analyzes user queries and extracts structured information including intent, entities, constraints, and temporal expressions. This decomposition enables the retrieval system to understand what the user is looking for and target relevant document sections.
+
+## Class Definition
+
+```python
+class QueryDecomposer:
+    async def decompose(self, query: str) -> Dict
+```
+
+## Methods
+
+### decompose
+
+Decomposes a natural language query into structured components.
+
+```python
+async def decompose(self, query: str) -> Dict
+```
+
+<ParamField path="query" type="str" required>
+  The natural language query to decompose
+</ParamField>
+
+<ResponseField name="intent" type="str">
+  The detected intent category. One of:
+  - `penalty` - Late fees, overdue payments
+  - `payment_terms` - Payment schedules, invoices
+  - `intellectual_property` - IP rights, licenses, ownership
+  - `indemnification` - Third-party claims, liability
+  - `termination` - Contract termination clauses
+  - `confidentiality` - Confidential information handling
+  - `scope_of_services` - Service definitions and obligations
+  - `unknown` - No matching intent found
+</ResponseField>
+
+<ResponseField name="entities" type="List[str]">
+  Extracted entities (significant words excluding stopwords)
+</ResponseField>
+
+<ResponseField name="constraints" type="Dict">
+  Extracted constraints from the query
+  <ResponseField name="timeframe" type="str">
+    Time period mentioned (e.g., "30 days", "2 weeks")
+  </ResponseField>
+  <ResponseField name="percentage" type="str">
+    Percentage values mentioned in the query
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="temporals" type="List[str]">
+  Extracted temporal expressions (dates, deadlines)
+</ResponseField>
+
+#### Example
+
+```python
+decomposer = QueryDecomposer()
+result = await decomposer.decompose("What is the late fee penalty percentage?")
+
+print(result)
+# {
+#   "intent": "penalty",
+#   "entities": ["late", "fee", "penalty", "percentage"],
+#   "constraints": {},
+#   "temporals": []
+# }
+```
+
+## Private Helper Methods
+
+### _extract_intent
+
+Matches query against regex patterns to determine intent category.
+
+```python
+def _extract_intent(self, query: str) -> str
+```
+
+**Intent Pattern Map:**
+
+```python
+intent_map = [
+    ("penalty", r"\blate fee\b|\boverdue\b|\bpenalt(y|ies)\b"),
+    ("payment_terms", r"\bpay\b|\binvoice\b|\bpayment\b"),
+    ("intellectual_property", r"\bowned by\b|\blicense\b|\bintellectual property\b|\bIP\b|\binfring"),
+    ("indemnification", r"\bindemnif(y|ication)\b|\bthird-party claims\b"),
+    ("termination", r"\bterminate\b|\btermination\b|\bwritten notice\b"),
+    ("confidentiality", r"\bconfidential\b|\bproprietary information\b"),
+    ("scope_of_services", r"\bshall provide\b|\bservices\b"),
+]
+```
+
+### _extract_entities
+
+Extracts significant words from the query, filtering out stopwords.
+
+```python
+def _extract_entities(self, query: str) -> List[str]
+```
+
+**Stopwords filtered:**
+```python
+stopwords = {"the", "is", "in", "at", "of", "for", "and", "a", "to", "what", "are", "on", "with", "by"}
+```
+
+### _extract_constraints
+
+Extracts structured constraints like timeframes and percentages.
+
+```python
+def _extract_constraints(self, query: str) -> Dict
+```
+
+**Patterns:**
+- Timeframe: `r"\bwithin (\d+ (days|weeks|months|years))\b"`
+- Percentage: `r"\b(\d+(\.\d+)?)%\b"`
+
+**Example:**
+```python
+query = "Payment due within 30 days with 5% late fee"
+constraints = decomposer._extract_constraints(query)
+# {"timeframe": "30 days", "percentage": "5"}
+```
+
+### _extract_temporals
+
+Extracts date expressions with temporal keywords.
+
+```python
+def _extract_temporals(self, query: str) -> List[str]
+```
+
+**Pattern:** `r"\b(on|by|before|after) (\w+ \d{1,2}(, \d{4})?)\b"`
+
+**Example:**
+```python
+query = "Payment due by March 15, 2024"
+temporals = decomposer._extract_temporals(query)
+# ["March 15, 2024"]
+```
+
+## Usage Example
+
+```python
+from components import QueryDecomposer
+
+decomposer = QueryDecomposer()
+
+# Example 1: Payment query
+result = await decomposer.decompose(
+    "What happens if payment is overdue by 30 days?"
+)
+print(result["intent"])  # "penalty"
+print(result["constraints"])  # {"timeframe": "30 days"}
+
+# Example 2: IP rights query
+result = await decomposer.decompose(
+    "Who owns the intellectual property created under this contract?"
+)
+print(result["intent"])  # "intellectual_property"
+print(result["entities"])  # ["owns", "intellectual", "property", "created", "contract"]
+```
+
+## Integration
+
+The decomposition result is passed to the `AgenticRetriever` to enable intent-based section targeting and relevance scoring.
+
+```python
+decomposer = QueryDecomposer()
+retriever = AgenticRetriever(doc_store)
+
+query = "What is the late payment penalty?"
+decomposition = await decomposer.decompose(query)
+sections = await retriever.retrieve(query, decomposition)
+```

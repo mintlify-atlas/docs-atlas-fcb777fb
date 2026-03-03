@@ -1,0 +1,226 @@
+---
+title: "AgenticRetriever"
+description: "Intelligent document retrieval with intent-based section targeting and multi-factor relevance scoring"
+---
+
+## Overview
+
+The `AgenticRetriever` class performs strategic document section selection using query decomposition results. It combines intent-based targeting, entity matching, and term frequency scoring to retrieve the 3-5 most relevant sections.
+
+## Class Definition
+
+```python
+class AgenticRetriever:
+    INTENT_SECTION_MAP = {
+        "penalty": ["Late Payment Penalties", "Payment Terms"],
+        "payment_terms": ["Payment Terms", "Late Payment Penalties"],
+        "intellectual_property": ["Intellectual Property Rights"],
+        "indemnification": ["Indemnification"],
+        "termination": ["Termination for Convenience"],
+        "confidentiality": ["Confidentiality"],
+        "scope_of_services": ["Scope of Services"],
+    }
+    
+    def __init__(self, doc_store: MockDocumentStore)
+```
+
+## Parameters
+
+<ParamField path="doc_store" type="MockDocumentStore" required>
+  Document store instance for accessing document sections
+</ParamField>
+
+## Methods
+
+### retrieve
+
+Retrieves the most relevant document sections based on query decomposition.
+
+```python
+async def retrieve(self, query: str, decomposition: Dict) -> List[Dict]
+```
+
+<ParamField path="query" type="str" required>
+  The original user query
+</ParamField>
+
+<ParamField path="decomposition" type="Dict" required>
+  Query decomposition from `QueryDecomposer.decompose()`
+  <ParamField path="intent" type="str">
+    Detected intent category
+  </ParamField>
+  <ParamField path="entities" type="List[str]">
+    Extracted entities
+  </ParamField>
+  <ParamField path="constraints" type="Dict">
+    Extracted constraints
+  </ParamField>
+</ParamField>
+
+<ResponseField name="sections" type="List[Dict]">
+  List of 3-5 most relevant sections, each containing:
+  <ResponseField name="title" type="str">
+    Section title from the document
+  </ResponseField>
+  <ResponseField name="content" type="str">
+    Section content text
+  </ResponseField>
+  <ResponseField name="page_num" type="int">
+    Page number where the section appears
+  </ResponseField>
+  <ResponseField name="_relevance_score" type="float">
+    Computed relevance score (higher is better)
+  </ResponseField>
+</ResponseField>
+
+#### Example
+
+```python
+retriever = AgenticRetriever(doc_store)
+
+query = "What is the late payment penalty?"
+decomposition = {
+    "intent": "penalty",
+    "entities": ["late", "payment", "penalty"],
+    "constraints": {},
+    "temporals": []
+}
+
+sections = await retriever.retrieve(query, decomposition)
+
+for section in sections:
+    print(f"{section['title']} (page {section['page_num']})")
+    print(f"Relevance: {section['_relevance_score']}")
+    print(section['content'][:200])
+    print()
+```
+
+## Intent-Section Mapping
+
+The retriever uses a predefined mapping to target specific sections based on detected intent. The first section in each list is the primary target (receives +7.0 score boost), while secondary sections receive +5.0.
+
+```python
+INTENT_SECTION_MAP = {
+    "penalty": ["Late Payment Penalties", "Payment Terms"],
+    "payment_terms": ["Payment Terms", "Late Payment Penalties"],
+    "intellectual_property": ["Intellectual Property Rights"],
+    "indemnification": ["Indemnification"],
+    "termination": ["Termination for Convenience"],
+    "confidentiality": ["Confidentiality"],
+    "scope_of_services": ["Scope of Services"],
+}
+```
+
+## Relevance Scoring Algorithm
+
+### _score_section
+
+Computes a multi-factor relevance score for each section.
+
+```python
+def _score_section(self, section: Dict, query: str, decomposition: Dict) -> float
+```
+
+**Scoring Weights:**
+
+1. **Intent-Based Scoring (Highest Priority)**
+   - Primary intent match: **+7.0** (5.0 + 2.0 bonus)
+   - Secondary intent match: **+5.0**
+
+2. **Entity Matching**
+   - Entity in content: **+1.0** per entity
+   - Entity in title: **+1.5** per entity
+
+3. **Query Term Matching**
+   - Term in content (>3 chars): **+0.5** per term
+
+4. **Text Search Boost**
+   - Applied from `section["_text_boost"]` if present
+
+**Example Scoring:**
+```python
+# Query: "What is the late payment penalty?"
+# Intent: "penalty"
+# Entities: ["late", "payment", "penalty"]
+
+# Section: "Late Payment Penalties"
+score = 7.0  # Primary intent match
+score += 1.5 * 3  # 3 entities in title
+score += 0.5 * 4  # 4 query terms in content
+# Total: ~13.5
+```
+
+## Private Helper Methods
+
+### _filter_irrelevant
+
+Removes sections below the relevance threshold.
+
+```python
+def _filter_irrelevant(self, sections: List[Dict], threshold: float = 1.0) -> List[Dict]
+```
+
+<ParamField path="sections" type="List[Dict]" required>
+  Sections with `_relevance_score` field
+</ParamField>
+
+<ParamField path="threshold" type="float" default="1.0">
+  Minimum relevance score to include (default: 2.0 in retrieve method)
+</ParamField>
+
+**Threshold in `retrieve()`: 2.0**
+
+Sections must score at least 2.0 to be considered relevant. If no sections meet this threshold, the top-scoring section is returned as a fallback.
+
+## Retrieval Strategy
+
+1. **Full-text search**: Query the document store
+2. **Fallback**: If no results, retrieve all sections from the sample contract
+3. **Scoring**: Apply multi-factor scoring to all sections
+4. **Filtering**: Keep only sections with score ≥ 2.0
+5. **Selection**: Return top 5 relevant sections (or top 1 if none meet threshold)
+6. **Logging**: Log retrieval results with intent and section count
+
+## Usage Example
+
+```python
+from components import QueryDecomposer, AgenticRetriever
+from mock_data import MockDocumentStore
+
+# Initialize components
+decomposer = QueryDecomposer()
+doc_store = MockDocumentStore()
+retriever = AgenticRetriever(doc_store)
+
+# Process query
+query = "What intellectual property rights does the client retain?"
+decomposition = await decomposer.decompose(query)
+
+# Retrieve sections
+sections = await retriever.retrieve(query, decomposition)
+
+print(f"Found {len(sections)} relevant sections")
+for section in sections:
+    print(f"\n{section['title']} (Score: {section['_relevance_score']:.1f})")
+    print(f"Page {section['page_num']}")
+```
+
+## Performance Characteristics
+
+- **Target sections**: 3-5 per query
+- **Minimum threshold**: 2.0 relevance score
+- **Fallback behavior**: Returns 1 section if none meet threshold
+- **Primary intent boost**: 7.0 points
+- **Entity title match**: 1.5 points each
+
+## Integration
+
+The retriever sits between the `QueryDecomposer` and the response generation pipeline:
+
+```python
+# Full pipeline
+decomposition = await decomposer.decompose(query)
+sections = await retriever.retrieve(query, decomposition)  # <- AgenticRetriever
+response = generator.generate(sections)
+verdict = await judge.evaluate(response, sections)
+```

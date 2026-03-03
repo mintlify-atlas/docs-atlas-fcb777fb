@@ -1,0 +1,279 @@
+---
+title: Logger
+description: Structured logging functions for DocMind workflow events
+---
+
+## Overview
+
+The logger module provides structured logging functions for tracking key events throughout the DocMind agentic workflow. All logs use a consistent format with timestamps and structured fields.
+
+### Logger Configuration
+
+```python
+import logging
+
+logger = logging.getLogger("docmind")
+logger.setLevel(logging.INFO)
+```
+
+**Format**: `YYYY-MM-DD HH:MM:SS | docmind | LEVEL | message`
+
+---
+
+## Logging Functions
+
+### log_query_decomposition
+
+Logs the results of query decomposition, showing intent classification and extracted entities.
+
+```python
+def log_query_decomposition(query: str, decomposition: Dict[str, Any]) -> None
+```
+
+<ParamField path="query" type="str" required>
+  The original user query string
+</ParamField>
+
+<ParamField path="decomposition" type="Dict[str, Any]" required>
+  Dictionary containing:
+  - `intent`: The classified intent (e.g., "specific_query", "compare")
+  - `entities`: List of extracted entities
+  - `constraints`: List of constraints or filters
+</ParamField>
+
+**Example Output**
+
+```
+2024-03-15 10:23:45 | docmind | INFO | Query decomposed | intent=specific_query | entities=2 | constraints=1
+```
+
+**Usage**
+
+```python
+decomposition = {
+    "intent": "specific_query",
+    "entities": ["payment terms", "late fees"],
+    "constraints": ["financial"]
+}
+log_query_decomposition("What are the payment terms?", decomposition)
+```
+
+---
+
+### log_retrieval
+
+Logs strategic retrieval results, showing which sections were retrieved for a given intent.
+
+```python
+def log_retrieval(intent: str, section_count: int, sections: list) -> None
+```
+
+<ParamField path="intent" type="str" required>
+  The intent that guided the retrieval strategy
+</ParamField>
+
+<ParamField path="section_count" type="int" required>
+  Number of sections retrieved
+</ParamField>
+
+<ParamField path="sections" type="list" required>
+  List of section dictionaries, each containing:
+  - `title`: Section title
+  - `page_num`: Page number
+</ParamField>
+
+**Example Output**
+
+```
+2024-03-15 10:23:46 | docmind | INFO | Strategic retrieval | intent=specific_query | sections_retrieved=2 | [Payment Terms (p.3), Late Payment Penalties (p.8)]
+```
+
+**Usage**
+
+```python
+sections = [
+    {"title": "Payment Terms", "page_num": 3},
+    {"title": "Late Payment Penalties", "page_num": 8}
+]
+log_retrieval("specific_query", len(sections), sections)
+```
+
+---
+
+### log_judge_evaluation
+
+Logs the results of the judge's hallucination detection and confidence scoring.
+
+```python
+def log_judge_evaluation(confidence: float, is_hallucinated: bool, summary: Dict[str, int]) -> None
+```
+
+<ParamField path="confidence" type="float" required>
+  Confidence score (0.0 to 1.0)
+</ParamField>
+
+<ParamField path="is_hallucinated" type="bool" required>
+  Whether hallucination was detected
+</ParamField>
+
+<ParamField path="summary" type="Dict[str, int]" required>
+  Dictionary containing claim counts:
+  - `supported`: Number of supported claims
+  - `unsupported`: Number of unsupported claims
+  - `contradicted`: Number of contradicted claims
+</ParamField>
+
+**Example Output**
+
+```
+2024-03-15 10:23:47 | docmind | INFO | Judge evaluation | confidence=0.92 | hallucinated=False | supported=5 | unsupported=0 | contradicted=0
+```
+
+**Usage**
+
+```python
+summary = {
+    "supported": 5,
+    "unsupported": 0,
+    "contradicted": 0
+}
+log_judge_evaluation(confidence=0.92, is_hallucinated=False, summary=summary)
+```
+
+---
+
+### log_retry_attempt
+
+Logs retry attempts when the judge detects hallucinations or low confidence.
+
+```python
+def log_retry_attempt(retry_count: int, max_retries: int = 2) -> None
+```
+
+<ParamField path="retry_count" type="int" required>
+  Current retry attempt number (1-indexed)
+</ParamField>
+
+<ParamField path="max_retries" type="int" default="2">
+  Maximum number of retries allowed
+</ParamField>
+
+**Example Output**
+
+```
+2024-03-15 10:23:48 | docmind | WARNING | Retry triggered | attempt=1/2
+```
+
+**Usage**
+
+```python
+log_retry_attempt(retry_count=1, max_retries=2)
+```
+
+---
+
+### log_workflow_complete
+
+Logs the completion of the entire workflow with execution path and final metrics.
+
+```python
+def log_workflow_complete(node_history: list, total_sections: int, confidence: float) -> None
+```
+
+<ParamField path="node_history" type="list" required>
+  List of node names in the order they were executed (e.g., ["decompose", "retrieve", "generate", "judge"])
+</ParamField>
+
+<ParamField path="total_sections" type="int" required>
+  Total number of sections used in the final response
+</ParamField>
+
+<ParamField path="confidence" type="float" required>
+  Final confidence score (0.0 to 1.0)
+</ParamField>
+
+**Example Output**
+
+```
+2024-03-15 10:23:49 | docmind | INFO | Workflow complete | path=decompose → retrieve → generate → judge | sections=2 | confidence=0.92
+```
+
+**Usage**
+
+```python
+node_history = ["decompose", "retrieve", "generate", "judge"]
+log_workflow_complete(node_history, total_sections=2, confidence=0.92)
+```
+
+---
+
+### log_api_call
+
+General-purpose logging for API operations and external calls.
+
+```python
+def log_api_call(operation: str, details: str = "") -> None
+```
+
+<ParamField path="operation" type="str" required>
+  The operation being performed (e.g., "openai.chat.completions", "retrieve_sections")
+</ParamField>
+
+<ParamField path="details" type="str" default="">
+  Optional additional details about the operation
+</ParamField>
+
+**Example Output**
+
+```
+2024-03-15 10:23:45 | docmind | INFO | API call | operation=openai.chat.completions | model=gpt-4o-mini
+```
+
+**Usage**
+
+```python
+log_api_call("openai.chat.completions", "model=gpt-4o-mini")
+log_api_call("retrieve_sections", "doc_id=service_agreement_2024")
+```
+
+---
+
+## Complete Workflow Example
+
+```python
+from logger import (
+    log_query_decomposition,
+    log_retrieval,
+    log_judge_evaluation,
+    log_workflow_complete
+)
+
+# 1. Query decomposition
+decomposition = {
+    "intent": "specific_query",
+    "entities": ["payment"],
+    "constraints": []
+}
+log_query_decomposition("What are the payment terms?", decomposition)
+
+# 2. Strategic retrieval
+sections = [{"title": "Payment Terms", "page_num": 3}]
+log_retrieval("specific_query", 1, sections)
+
+# 3. Judge evaluation
+summary = {"supported": 3, "unsupported": 0, "contradicted": 0}
+log_judge_evaluation(0.95, False, summary)
+
+# 4. Workflow completion
+node_history = ["decompose", "retrieve", "generate", "judge"]
+log_workflow_complete(node_history, 1, 0.95)
+```
+
+**Console Output**
+
+```
+2024-03-15 10:23:45 | docmind | INFO | Query decomposed | intent=specific_query | entities=1 | constraints=0
+2024-03-15 10:23:46 | docmind | INFO | Strategic retrieval | intent=specific_query | sections_retrieved=1 | [Payment Terms (p.3)]
+2024-03-15 10:23:47 | docmind | INFO | Judge evaluation | confidence=0.95 | hallucinated=False | supported=3 | unsupported=0 | contradicted=0
+2024-03-15 10:23:48 | docmind | INFO | Workflow complete | path=decompose → retrieve → generate → judge | sections=1 | confidence=0.95
+```

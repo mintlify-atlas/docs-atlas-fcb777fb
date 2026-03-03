@@ -1,0 +1,281 @@
+---
+title: 'Workflow Nodes'
+description: 'Node functions that process state in the DocMind workflow'
+---
+
+## Overview
+
+Workflow nodes are async functions that process the `DocMindState` as it flows through the graph. Each node performs a specific task, updates the state, and tracks its execution in the `node_history`.
+
+All nodes follow the signature:
+```python
+async def node_name(state: DocMindState) -> DocMindState
+```
+
+## Node Functions
+
+### decompose_node
+
+Decomposes the user query into structured sub-queries for targeted retrieval.
+
+```python
+async def decompose_node(state: DocMindState) -> DocMindState
+```
+
+**Process:**
+1. Initializes a `QueryDecomposer` component
+2. Decomposes the user query into structured sub-queries
+3. Stores decomposition result in state
+4. Appends "decompose" to `node_history`
+
+**State Modifications:**
+<ResponseField name="decomposition" type="Dict">
+  Structured decomposition of the original query
+</ResponseField>
+
+<ResponseField name="node_history" type="List[str]">
+  Appends "decompose" to the history
+</ResponseField>
+
+**Implementation:**
+```python
+from state_types import DocMindState
+from components import QueryDecomposer
+
+async def decompose_node(state: DocMindState) -> DocMindState:
+    decomposer = QueryDecomposer()
+    decomposition = await decomposer.decompose(state["query"])
+    state["decomposition"] = decomposition
+    state["node_history"] = state.get("node_history", []) + ["decompose"]
+    return state
+```
+
+---
+
+### retrieve_node
+
+Retrieves relevant documentation sections based on the query and decomposition.
+
+```python
+async def retrieve_node(state: DocMindState) -> DocMindState
+```
+
+**Process:**
+1. Initializes `MockDocumentStore` and `AgenticRetriever`
+2. Retrieves relevant sections using query and decomposition
+3. Stores retrieved sections in state
+4. Appends "retrieve" to `node_history`
+
+**State Modifications:**
+<ResponseField name="retrieved_sections" type="List[Dict]">
+  List of retrieved documentation sections
+</ResponseField>
+
+<ResponseField name="node_history" type="List[str]">
+  Appends "retrieve" to the history
+</ResponseField>
+
+**Implementation:**
+```python
+from mock_data import MockDocumentStore
+from components import AgenticRetriever
+
+async def retrieve_node(state: DocMindState) -> DocMindState:
+    store = MockDocumentStore()
+    retriever = AgenticRetriever(store)
+    sections = await retriever.retrieve(state["query"], state["decomposition"])
+    state["retrieved_sections"] = sections
+    state["node_history"] = state.get("node_history", []) + ["retrieve"]
+    return state
+```
+
+---
+
+### generate_node
+
+Generates a response based on the retrieved documentation sections.
+
+```python
+async def generate_node(state: DocMindState) -> DocMindState
+```
+
+**Process:**
+1. Initializes a `ResponseGenerator` component
+2. Generates response from retrieved sections
+3. Stores generated response in state
+4. Appends "generate" to `node_history`
+
+**State Modifications:**
+<ResponseField name="generated_response" type="str">
+  Generated response based on retrieved sections
+</ResponseField>
+
+<ResponseField name="node_history" type="List[str]">
+  Appends "generate" to the history
+</ResponseField>
+
+**Implementation:**
+```python
+from components import ResponseGenerator
+
+async def generate_node(state: DocMindState) -> DocMindState:
+    generator = ResponseGenerator()
+    response = generator.generate(state["retrieved_sections"])
+    state["generated_response"] = response
+    state["node_history"] = state.get("node_history", []) + ["generate"]
+    return state
+```
+
+---
+
+### judge_node
+
+Evaluates the generated response for hallucinations and quality.
+
+```python
+async def judge_node(state: DocMindState) -> DocMindState
+```
+
+**Process:**
+1. Initializes an `LLMJudge` component
+2. Evaluates generated response against retrieved sections
+3. Stores verdict in state
+4. Increments `retry_count` if hallucination detected
+5. Appends "judge" to `node_history`
+
+**State Modifications:**
+<ResponseField name="judge_verdict" type="Dict">
+  Verdict containing:
+  - `is_hallucinated` (bool): Whether response contains hallucinations
+  - `should_return` (bool): Whether response is acceptable to return
+</ResponseField>
+
+<ResponseField name="retry_count" type="int">
+  Incremented by 1 if `is_hallucinated` is True
+</ResponseField>
+
+<ResponseField name="node_history" type="List[str]">
+  Appends "judge" to the history
+</ResponseField>
+
+**Implementation:**
+```python
+from components import LLMJudge
+
+async def judge_node(state: DocMindState) -> DocMindState:
+    judge = LLMJudge()
+    verdict = await judge.evaluate(state["generated_response"], state["retrieved_sections"])
+    state["judge_verdict"] = verdict
+    state["node_history"] = state.get("node_history", []) + ["judge"]
+    # Increment retry count if hallucinated
+    if verdict.get("is_hallucinated", False):
+        state["retry_count"] = state.get("retry_count", 0) + 1
+    return state
+```
+
+---
+
+### output_node
+
+Produces the final output based on the judge verdict.
+
+```python
+async def output_node(state: DocMindState) -> DocMindState
+```
+
+**Process:**
+1. Checks if judge verdict allows returning the response
+2. Sets `final_output` to either generated response or fallback message
+3. Appends "output" to `node_history`
+
+**State Modifications:**
+<ResponseField name="final_output" type="str">
+  Final output to return to user:
+  - If `should_return` is True: returns `generated_response`
+  - Otherwise: returns fallback message
+</ResponseField>
+
+<ResponseField name="node_history" type="List[str]">
+  Appends "output" to the history
+</ResponseField>
+
+**Implementation:**
+```python
+async def output_node(state: DocMindState) -> DocMindState:
+    if state["judge_verdict"] and state["judge_verdict"].get("should_return", False):
+        state["final_output"] = state["generated_response"]
+    else:
+        state["final_output"] = "Unable to provide a confident response. Please rephrase your query."
+    state["node_history"] = state.get("node_history", []) + ["output"]
+    return state
+```
+
+---
+
+## Conditional Logic
+
+### should_retry
+
+Determines whether to retry retrieval or proceed to output based on judge verdict and retry count.
+
+```python
+def should_retry(state: DocMindState) -> str
+```
+
+**Parameters:**
+<ParamField path="state" type="DocMindState" required>
+  Current workflow state
+</ParamField>
+
+**Returns:**
+<ResponseField name="return" type="str">
+  - `"retry"`: Retry from retrieve_node (if hallucinated and retry_count < 2)
+  - `"output"`: Proceed to output_node
+</ResponseField>
+
+**Retry Logic:**
+- Maximum retries: **2 attempts**
+- Retry triggered when:
+  - `judge_verdict.is_hallucinated` is `True`
+  - `retry_count` is less than 2
+- Logs retry attempt when retrying
+
+**Implementation:**
+```python
+from logger import log_retry_attempt
+
+def should_retry(state: DocMindState) -> str:
+    verdict = state.get("judge_verdict", {})
+    retry_count = state.get("retry_count", 0)
+    
+    # Retry if hallucinated and haven't exceeded max retries (2 attempts max)
+    if verdict.get("is_hallucinated", False) and retry_count < 2:
+        log_retry_attempt(retry_count + 1, 2)
+        return "retry"
+    return "output"
+```
+
+**Example Flow:**
+```python
+# First attempt - hallucination detected
+state["judge_verdict"] = {"is_hallucinated": True}
+state["retry_count"] = 1
+should_retry(state)  # Returns "retry" -> goes back to retrieve_node
+
+# Second attempt - still hallucinated
+state["retry_count"] = 2
+should_retry(state)  # Returns "output" -> max retries reached
+```
+
+## Node Execution Order
+
+The typical execution order through the workflow:
+
+1. **decompose** → Breaks down query
+2. **retrieve** → Fetches relevant sections
+3. **generate** → Creates response
+4. **judge** → Evaluates quality
+5. **Conditional:**
+   - If hallucinated and retry_count < 2: Return to **retrieve**
+   - Otherwise: Proceed to **output**
+6. **output** → Returns final result
