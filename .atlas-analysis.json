@@ -1,0 +1,88 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "DocMind",
+  "projectDescription": "Production-grade document RAG system with agentic retrieval and LLM-as-judge hallucination detection for legal document analysis.",
+  "theme": "aspen",
+  "primaryColor": "#2563EB",
+  "lightColor": "#60A5FA",
+  "darkColor": "#1E40AF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/query-decomposition",
+              "concepts/agentic-retrieval",
+              "concepts/llm-judge",
+              "concepts/langgraph-workflow"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/installation",
+              "guides/running-queries",
+              "guides/testing",
+              "guides/customization"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Components",
+            "pages": [
+              "api/query-decomposer",
+              "api/agentic-retriever",
+              "api/llm-judge",
+              "api/response-generator"
+            ]
+          },
+          {
+            "group": "Workflow",
+            "pages": [
+              "api/nodes",
+              "api/state-types",
+              "api/workflow"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/mock-data",
+              "api/logger"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Strategic retrieval with intent-based section selection and precise page number tracking",
+    "LLM-as-Judge hallucination detection with structured rubric evaluation",
+    "LangGraph workflow orchestration with automatic retry logic",
+    "Query decomposition using regex-based intent, entity, and constraint extraction",
+    "Confidence scoring system combining intent mapping, entity matching, and query term analysis"
+  ],
+  "publicApiSurface": [
+    "QueryDecomposer.decompose(query: str) -> Dict",
+    "AgenticRetriever.retrieve(query: str, decomposition: Dict) -> List[Dict]",
+    "LLMJudge.evaluate(response: str, context: List[Dict]) -> Dict",
+    "ResponseGenerator.generate(sections: List[Dict]) -> str",
+    "build_graph_workflow() -> StateGraph",
+    "run_docmind(query: str) -> str"
+  ]
+}
